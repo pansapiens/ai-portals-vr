@@ -1,4 +1,5 @@
 import { Engine } from './core/engine.js';
+import { XRView } from './core/xr.js';
 import * as REGISTRY from './worlds/index.js';
 const WORLDS = REGISTRY.WORLDS, SUITES = REGISTRY.SUITES || [];   // a tree whose own registry has no list of journeys still loads
 import { RIDES, COMPANIONS, STYLES } from './extras.js';
@@ -233,6 +234,8 @@ async function boot() {
   $('r-strange').value = engine.settings.strangeness; $('r-strange').oninput = (e) => { engine.settings.strangeness = Number(e.target.value); };
   const root = document.documentElement, fsOn = root.requestFullscreen || root.webkitRequestFullscreen, fsOff = document.exitFullscreen || document.webkitExitFullscreen;
   const full = () => { try { if (document.fullscreenElement || document.webkitFullscreenElement) fsOff.call(document); else { const r = fsOn.call(root); if (r && r.catch) r.catch(() => {}); } } catch (e) {} };
+  // a headset (Meta Quest's browser and others with WebXR): the button appears only where a VR session can be had
+  XRView.supported().then((ok) => { if (!ok) return; const b = $('b-vr'); b.style.display = ''; b.onclick = () => engine.xr.toggle().catch((e) => console.warn('vr', e)); });
   if (fsOn) $('b-full').onclick = full; else $('b-full').style.display = 'none';   // an iPhone has no fullscreen: add the page to the home screen instead
   const bSound = $('b-sound');
   const sound = async () => {

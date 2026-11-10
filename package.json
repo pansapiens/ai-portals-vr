@@ -7,6 +7,7 @@
   "license": "CC-BY-NC-SA-4.0",
   "scripts": {
     "start": "node tools/serve.mjs",
+    "start:vr": "test -f .cert/key.pem || (mkdir -p .cert && openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=portals-dev -keyout .cert/key.pem -out .cert/cert.pem) && HOST=0.0.0.0 TLS_CERT=.cert/cert.pem TLS_KEY=.cert/key.pem node tools/serve.mjs . 8444",
     "build": "node tools/build-deploy.mjs",
     "preview": "node tools/serve.mjs dist 8001"
   },

@@ -1,5 +1,7 @@
 # Portals
 
+> **This is a fork of [emollick/ai-portals](https://github.com/emollick/ai-portals) with VR support, targeting the Meta Quest 3 and 3S browser.** The changes for VR were made mostly by Claude Opus 5.5. Live at [pansapiens.github.io/ai-portals-vr](https://pansapiens.github.io/ai-portals-vr/): open it in the Quest browser, point at the page to show the bar, and press the VR button. See [VR (Meta Quest)](#vr-meta-quest) below. Everything after this note is the original README, apart from that section.
+
 An endless, hands-off flight through 471 generated 3D worlds in a browser. Each world ends in a portal that opens on the next one, and nothing is steered: it flies itself. Live at [portals-endless-worlds.netlify.app](https://portals-endless-worlds.netlify.app) (press S for sound).
 
 [![The Midwinter Express, one of the worlds of Portals: a steam train crosses a stone viaduct above a snowy town at dusk](readme/the-midwinter-express.jpg)](https://portals-endless-worlds.netlify.app)
@@ -47,6 +49,18 @@ The result is in `dist`, plain static files that any web host can serve, and the
 | F | Fullscreen |
 
 Move the mouse and a bar appears at the bottom of the screen with a button for each of these, and two sliders: Pace, and one that runs from Earthly to Strange (in a narrow window the sliders move into the options).
+
+## VR (Meta Quest)
+
+In a browser with WebXR (the Meta Quest browser, or desktop Chrome with a PC headset) the bar gets a VR button. In the headset the flight is the same, drawn once for each eye. You can look around and lean, while the flight moves you along the route and turns your heading with it. Pitch and roll are not applied, and the steady camera is always on. Trigger: hurry to the next portal. Grip: pause. The glow pass and the art styles are left out in the headset. The Graphics level sets the highest resolution (Low 60% of the headset's own, Medium 75%, High 90%, Ultra 100%), and the resolution drops below that, to 45% at the least, while frames miss the headset's refresh rate. On Auto the level itself also steps down.
+
+WebXR only runs on `localhost` or over https. To serve your machine to a headset on the same network:
+
+```
+npm run start:vr
+```
+
+That makes a self-signed certificate in `.cert/` the first time and serves on https://YOUR-LAN-IP:8444/. The headset's browser warns about the certificate once: choose Advanced, then Proceed. A USB alternative with no certificate: `adb reverse tcp:8000 tcp:8000` with `npm start` running, then open http://localhost:8000 in the headset. `node tools/xr-check.mjs` checks the headset drawing in headless Chrome with a fake headset.
 
 ## Layout
 

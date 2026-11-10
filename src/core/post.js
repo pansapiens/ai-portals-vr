@@ -154,11 +154,35 @@ export class Post {
   }
   render(scene, camera, p, time, fade = 1) {
     this.renderPass.scene = scene; this.renderPass.camera = camera;
+    this._grade(p, time, fade);
+    this.composer.render();
+  }
+  // WebXR (xr.js): buf holds every eye's picture where the headset's buffer has it; it is graded straight onto that buffer
+  // (target) by the final pass's own shader, drawn once per eye by three's headset camera. No glow, no style lens.
+  renderXR(buf, target, camera, p, time, fade = 1) {
+    if (!this.xrQuad) {
+      const g = new THREE.BufferGeometry();   // one triangle over the whole of each eye's viewport
+      g.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+      g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2));
+      this.final.uniforms.uRes = { value: new THREE.Vector2(1, 1) };
+      const m = new THREE.ShaderMaterial({ uniforms: this.final.uniforms, depthTest: false, depthWrite: false,
+        vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }',
+        // the picture is looked up by where the pixel is in the headset's buffer; vUv (0 to 1 in each eye) keeps the vignette per eye
+        fragmentShader: FinalShader.fragmentShader.replace('void main(){', 'uniform vec2 uRes;\n    void main(){ vec2 sUv=gl_FragCoord.xy/uRes;').replace(/texture2D\(tDiffuse,vUv/g, 'texture2D(tDiffuse,sUv') });
+      const q = new THREE.Mesh(g, m); q.frustumCulled = false;
+      this.xrQuad = new THREE.Scene(); this.xrQuad.add(q);
+    }
+    this._grade(p, time, fade);
+    const u = this.final.uniforms, r = this.renderer;
+    u.tDiffuse.value = buf.texture; u.uRes.value.set(target.width, target.height);
+    r.xr.enabled = true; r.setRenderTarget(target);
+    try { r.render(this.xrQuad, camera); } finally { r.xr.enabled = false; }
+  }
+  _grade(p, time, fade) {
     this.bloom.strength = p.bloomStrength; this.bloom.radius = p.bloomRadius; this.bloom.threshold = p.bloomThreshold;
     const u = this.final.uniforms;
     u.uExposure.value = p.exposure; u.uSaturation.value = p.saturation; u.uContrast.value = p.contrast;
     u.uTint.value.copy(p.tint); u.uShadowTint.value.copy(p.shadowTint);
     u.uVignette.value = p.vignette; u.uGrain.value = p.grain; u.uAberration.value = p.aberration; u.uFlat.value = p.flat || 0; u.uTime.value = time; u.uFade.value = fade;
-    this.composer.render();
   }
 }

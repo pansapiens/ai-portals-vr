@@ -68,8 +68,11 @@ export function fovFor(fov, aspect) {
 export class Governor {
   constructor() { this.ft = []; this.fps = 0; this.reset(-1e9); }
   reset(now) { this.ft.length = 0; this.futile = 0; this.slow = 0; this.naps = 0; this.sleepUntil = 0; this.pending = 0; this.before = 0; this.lastRaise = -1e9; this.raiseWait = 0; this.noRaiseUntil = 0; this.lastChange = now; }
-  // raw: seconds the last frame took; now: milliseconds; s: { pr, minPR, maxPR, canDown }
+  // raw: seconds the last frame took; now: milliseconds; s: { pr, minPR, maxPR, canDown, hz }
+  // hz (a headset's refresh rate): a frame that misses it is a judder, so slow means under 90% of that rate and fast means
+  // within 3% of it, in place of the screen's 43 and 57 a second
   tick(raw, now, s) {
+    const slow = s.hz ? 1 / (0.9 * s.hz) : 1 / 43, fast = s.hz ? 1 / (0.97 * s.hz) : 1 / 57, crawl = s.hz ? 1 / (0.75 * s.hz) : 1 / 34;
     if (raw > 0.25) return null;                          // a hitch while a world is being built is not the frame rate
     const ft = this.ft; ft.push(raw); if (ft.length < 90) return null;
     ft.sort((a, b) => a - b); let avg = 0; for (let i = 0; i < 81; i++) avg += ft[i]; avg /= 81; ft.length = 0;   // the slowest tenth are hitches
@@ -83,14 +86,14 @@ export class Governor {
         return set(this.before);
       }
     }
-    if (avg > 1 / 43) {
+    if (avg > slow) {
       // a raise that had to be taken back makes the next raise wait longer
       if (now - this.lastRaise < 15000) { this.raiseWait = Math.min(this.raiseWait ? this.raiseWait * 2 : 30000, 600000); this.noRaiseUntil = now + this.raiseWait; this.lastRaise = -1e9; }
       if (s.pr > s.minPR + 0.01) { if (!this.futile) this.before = s.pr; this.pending = avg; this.slow = 0; return set(s.pr * 0.85); }
-      if (s.canDown && avg > 1 / 34 && ++this.slow >= 3) { this.slow = 0; return { down: true }; }
+      if (s.canDown && avg > crawl && ++this.slow >= 3) { this.slow = 0; return { down: true }; }
     } else {
       this.slow = 0;
-      if (avg < 1 / 57 && s.pr < s.maxPR - 0.01 && now > this.noRaiseUntil) { this.lastRaise = now; return set(s.pr * 1.08); }
+      if (avg < fast && s.pr < s.maxPR - 0.01 && now > this.noRaiseUntil) { this.lastRaise = now; return set(s.pr * 1.08); }
     }
     return null;
   }

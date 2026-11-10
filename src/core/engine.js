@@ -9,6 +9,7 @@ import * as core from '../kit/core.js';
 import { Extras } from './extras.js';
 import { StyleLens } from './style.js';
 import { Perf } from './perf.js';
+import { XRView } from './xr.js';
 import { tierOf, poolOf, pickNext, tourNext, seriesNext, lastUnseen, firstWorld } from './pick.js';
 
 const { clamp, smoothstep, bell, makeRng, makeNoise, hashSeed } = core;
@@ -128,9 +129,10 @@ export class Engine {
     // a phone may take the graphics context away (another app, low memory); the page reloads when it comes back
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; this.events.status({ lost: true }); });
     canvas.addEventListener('webglcontextrestored', () => this.events.status({ restored: true }));
+    this.xr = new XRView(this);   // a headset session (xr.js); the animation loop below is the headset's while one runs
     this._last = performance.now();
     this._tick = this._tick.bind(this);
-    requestAnimationFrame(this._tick);
+    renderer.setAnimationLoop(this._tick);
   }
 
   _makePortalRT() {
@@ -160,6 +162,7 @@ export class Engine {
     this.adaptive = !this.fixedPR && !this.opts.freeze && t.adapt;
   }
   _resize(force) {
+    if (this.xr.on) return;   // the headset sets the sizes while it runs; sessionend calls this again
     const w = window.innerWidth, h = window.innerHeight;
     if (!force && w === this.w && h === this.h) return;
     if (w < 2 || h < 2) return;
@@ -581,7 +584,7 @@ export class Engine {
   // ---------- camera ----------
   // Gentle: the visitor's one comfort choice (the steady camera, or 'calm worlds only', which includes it). It means the
   // steady camera with its level horizon and firm ceiling, no surprise rides (core/extras.js) and a gentler hurry.
-  get gentle() { return this.settings.camera === 'steady' || !!this.settings.calmOnly; }
+  get gentle() { return this.settings.camera === 'steady' || !!this.settings.calmOnly || this.xr.on; }   // a headset always flies gently
   // The camera's slow turn toward the gaze of _pose, one step of dt seconds. A steady camera (calm) also turns more
   // slowly, and its turn has a ceiling: with calm 0 this is the plain slerp and nothing else. tools/calm.mjs replays
   // flights with this same function.
@@ -708,6 +711,7 @@ export class Engine {
     this.rimIn = rimIn;   // the rim point nearest the middle of the frame, in half-frames: under 1, a point of the rim is in the picture
     if (behind) { if (minDepth < -P.boundR * 2 && !feed) return false; minX = minY = -1; maxX = maxY = 1; }
     if (!feed && (maxX < -1 || minX > 1 || maxY < -1 || minY > 1)) return false;
+    if (this.xr.on) return this.xr.portal(A, B, dt);
 
     const pc = this.portalCam, last = feed && A.path.length - A.dist < 3;
     // full size from the next frame on (the world has this frame's texture already) once the opening is that large
@@ -800,7 +804,7 @@ export class Engine {
 
   // ---------- frame ----------
   _tick(now) {
-    requestAnimationFrame(this._tick);
+    this.xr.begin();
     const gap = now - this._last, raw = Math.min(Math.max(0.1, this.opts.maxDt || 0), gap / 1000); this._last = now;
     this._gap = this._gap == null ? 16.7 : this._gap + (Math.min(gap, 1000) - this._gap) * 0.2;   // how often frames come round, smoothed (see _anteMs)
     if (!this.opts.hold) {   // hold: freeze-mode harness renders on demand only
@@ -850,12 +854,14 @@ export class Engine {
     }
 
     const cam = this.camera, u = clamp(A.dist / L, 0, 1), remaining = L - A.dist;
-    const calmTo = this.settings.camera === 'steady' || this.settings.calmOnly ? 1 : 0;   // a calm journey always flies with the steady camera
+    const xr = this.xr.on;
+    const calmTo = this.settings.camera === 'steady' || this.settings.calmOnly || xr ? 1 : 0;   // a calm journey (and a headset) always flies with the steady camera
     this.calm = frozen ? calmTo : this.calm + clamp(calmTo - this.calm, -raw * 0.7, raw * 0.7);
     this._pose(A, A.dist, cam.position, _q);
     if (!this.camInit || frozen) { this.camQuat.copy(_q); this.camInit = true; }
     else { this.arrived += dt; this._turn(this.camQuat, _q, dt); }
     cam.quaternion.copy(this.camQuat);
+    if (xr) this.xr.pose(cam, this.camQuat);   // the route's pose becomes the rig; cam is now the viewer's head
 
     // a feed world shows the next world itself, so its opening is open as soon as there is a next world
     const revealT = B ? (A.feed ? 1 : 1 - smoothstep(A.revealDist * 0.6, A.revealDist, remaining)) : 0;
@@ -880,13 +886,14 @@ export class Engine {
     blendPost(A.post, B ? B.post : A.post, B ? this.blend : 0, this.postNow);
     // how much of the glow laid over the opening the opening takes back (portal.js, wash()); _renderPortal turns it down as the
     // opening comes to fill the frame (see there)
-    const dewash = B ? (this.opts.dewash ?? A.portalSpec.dewash ?? (A.feed ? 0 : 0.85)) : 0;
+    const dewash = B && !xr ? (this.opts.dewash ?? A.portalSpec.dewash ?? (A.feed ? 0 : 0.85)) : 0;
     A.portal.setDewash(this.post.bloomTexture, dewash);
     if (B) {   // inside the opening the next world is shown at its own exposure and tint, within limits, not at this world's
       const n = this.postNow, g = B.post.exposure / Math.max(1e-3, n.exposure), lim = (x) => clamp(x, 0.45, 2.2);
       A.portal.setGain(lim(g * B.post.tint.r / Math.max(0.05, n.tint.r)), lim(g * B.post.tint.g / Math.max(0.05, n.tint.g)), lim(g * B.post.tint.b / Math.max(0.05, n.tint.b)));
     }
-    cam.fov = fovFor(this.postNow.fov, cam.aspect); cam.far = A.cam.far;
+    if (!xr) cam.fov = fovFor(this.postNow.fov, cam.aspect);   // (a headset's field of view is its own: see XRView.pose)
+    cam.far = A.cam.far;
     // THE LENS'S NEAR PLANE NEVER REACHES THE OPENING. The worlds cross 0.45 m before the line's end; a world whose near distance
     // is longer than the lens then stands from the opening had the opening cut away before the crossing (all at once where the
     // lens looks square at it, from one side where it looks aslant) and the old world drawn again behind it for a frame or two
@@ -951,7 +958,8 @@ export class Engine {
     if (A.view.used) A.shown = drew ? B : null;
     const t2 = performance.now();
     this.fade = Math.min(1, this.fade + (frozen ? 1 : raw * 0.6));
-    this.post.render(A.scene, cam, this.postNow, this.time, this.fade);
+    if (xr) this.xr.render(A, cam, this.postNow, this.time, this.fade);
+    else this.post.render(A.scene, cam, this.postNow, this.time, this.fade);
     const t3 = performance.now(); let fresh = null;
     for (const p of progs) if (!known.has(p)) { known.add(p); (fresh || (fresh = [])).push((p.type || '?') + (p.name ? ':' + p.name : '')); }
     if (fresh) this.perf.shaders(A.def.id, u, fresh, t3 - t1); else { this.perf.mark('portal-draw', t2 - t1); this.perf.mark('draw', t3 - t2); }
@@ -996,7 +1004,7 @@ export class Engine {
     this._setTier(tier);
   }
   _setTier(tier) {
-    this.tier = tier; this._limits(); this.pr = this.maxPR;
+    this.tier = tier; this._limits(); this.pr = this.maxPR; this.xr.scale = this.xr.maxScale;
     this.gov.reset(performance.now());
     const samples = this._samplesFor(tier);
     if (samples !== this.samples) {
@@ -1010,12 +1018,15 @@ export class Engine {
   skip() { if (this.next && this.next.ready) this.boost = 1; }
 
   // adaptive resolution and, on 'auto', the step down a level (the rules are in quality.js)
+  // In a headset the same rules move the headset's drawing scale (xr.js) instead, against the headset's own refresh rate.
   _adapt(raw) {
-    const g = this.gov, a = g.tick(raw, performance.now(), { pr: this.pr, minPR: this.minPR, maxPR: this.maxPR, canDown: this.qualitySetting === 'auto' && this.tier !== 'low' });
+    const g = this.gov, X = this.xr.on ? this.xr : null, canDown = this.qualitySetting === 'auto' && this.tier !== 'low';
+    const a = g.tick(raw, performance.now(), X ? { pr: X.scale, minPR: X.minScale, maxPR: X.maxScale, canDown, hz: X.hz } : { pr: this.pr, minPR: this.minPR, maxPR: this.maxPR, canDown });
     this.fps = g.fps;
     if (!a) return;
     const t0 = performance.now();
     if (a.down) this._setTier(QUALITY_LEVELS[QUALITY_LEVELS.indexOf(this.tier) - 1]);
+    else if (X) X.scale = a.pr;
     else if (Math.abs(a.pr - this.pr) > 0.005) { this.pr = a.pr; this._resize(true); }
     this.perf.mark('resize', performance.now() - t0 + 1);
   }
