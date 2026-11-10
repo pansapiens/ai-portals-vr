@@ -8,7 +8,8 @@ const mock = () => {
   WebGL2RenderingContext.prototype.makeXRCompatible = async () => {};
   const t = Math.tan(50 * Math.PI / 180), n = 0.1, f = 1000;
   const proj = new Float32Array([1 / t, 0, 0, 0, 0, 1 / t, 0, 0, 0, 0, -(f + n) / (f - n), -1, 0, 0, -2 * f * n / (f - n), 0]);
-  const view = (dx) => ({ eye: dx < 0 ? 'left' : 'right', projectionMatrix: proj, transform: { matrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, dx, 0, 0, 1]) } });
+  window.__yaw = 0;   // the head's turn (radians, to the left)
+  const view = (dx) => { const c = Math.cos(window.__yaw), s = Math.sin(window.__yaw); return { eye: dx < 0 ? 'left' : 'right', projectionMatrix: proj, transform: { matrix: new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, dx, 0, 0, 1]) } }; };
   class Session extends EventTarget {
     constructor() { super(); this.renderState = { baseLayer: null }; this.inputSources = []; }
     updateRenderState(s) { Object.assign(this.renderState, s); }
@@ -29,6 +30,12 @@ await page.goto(url);
 await page.waitForFunction(() => window.__engine?.cur && !window.__engine.cur.def.antechamber, null, { timeout: 120000 });
 await page.evaluate(() => window.__engine.xr.toggle());
 await page.waitForFunction(() => window.__engine.xr.on && window.__engine.next?.ready, null, { timeout: 200000, polling: 500 });
+// the head turned: the eyes turn with it, the camera the worlds are handed keeps the route's heading (a seat on a rocket stays put)
+await page.evaluate(() => { window.__yaw = 0.8; }); await page.waitForTimeout(800);
+const headFree = await page.evaluate(() => { const e = window.__engine, q = e.camera.quaternion, y = e.xr.yaw, eye = e.xr.eyes[0].quaternion;
+  const dot = (a, b, c, d) => Math.abs(a * q.x + b * q.y + c * q.z + d * q.w);
+  return dot(0, Math.sin(y / 2), 0, Math.cos(y / 2)) > 0.9999 && Math.abs(Math.abs(eye.angleTo(q)) - 0.8) < 0.01; });
+await page.evaluate(() => { window.__yaw = 0; });
 const count = await page.evaluate(() => window.__engine.count);
 for (const [i, rem] of [[0, 60], [1, 6]]) {
   await page.evaluate((rem) => { const e = window.__engine; e.cur.dist = e.cur.path.length - rem; e.reveal = 1; }, rem);
@@ -39,5 +46,5 @@ await page.waitForTimeout(1500); await page.screenshot({ path: 'xr-check-2.png' 
 await page.evaluate(() => window.__engine.xr.toggle()); await page.waitForTimeout(1500);
 const flat = await page.evaluate(() => !window.__engine.xr.on && !window.__engine.renderer.xr.isPresenting);
 await browser.close();
-console.log({ crossed, flatAgain: flat, errors });
-process.exit(crossed && flat && !errors.length ? 0 : 1);
+console.log({ headFree, crossed, flatAgain: flat, errors });
+process.exit(headFree && crossed && flat && !errors.length ? 0 : 1);

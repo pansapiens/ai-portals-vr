@@ -830,16 +830,18 @@ export default {
     // tussocks: thick under the flight, thinning and coarsening outward; none where the shaders paint sinter, mats, river or wallow
     const tipGain = look.frost > 0.5 ? [1.45, 1.42, 1.3] : lookName === 'day' ? [1.08, 1.06, 0.8] : [1.34, 1.22, 0.9];
     const tuftU = { uGrass: { value: new THREE.Vector4(tipGain[0], tipGain[1], tipGain[2], Math.min(3 * SUN.y + 0.07, lookName === 'day' ? 0.44 : 0.6)) }, uTFrost: { value: look.frost * 0.55 * (look.frost > 0.5 ? 1 : 0.4) }, uTAmb: { value: look.frost > 0.5 && lookName !== 'night' ? 0.5 : 0.12 }, uSnow: { value: look.snow ? 1 : 0 } };
-    let tuftMat = null;
+    // The tussocks are most of this world's triangles, and alpha-tested cards drawn twice over (once per eye) are what a
+    // headset's GPU handles worst: in a headset only half of them are drawn (an even sample, by each tuft's own seed).
+    let tuftMat = null; const tufts = [];
     {
       const gr = rng.fork('grass'), sEnd = 217, K = detail * (0.85 + 0.15 * density), P = new THREE.Vector3(), Tn = new THREE.Vector3();
       const nS = Math.ceil(sEnd) + 10, fxs = new Float32Array(nS + 1), fzs = new Float32Array(nS + 1), ftx = new Float32Array(nS + 1), ftz = new Float32Array(nS + 1);
       for (let i = 0; i <= nS; i++) { path.posAtDist(i - 8, P); path.tangentAtDist(i - 8, Tn); const tl = Math.hypot(Tn.x, Tn.z) || 1; fxs[i] = P.x; fzs[i] = P.z; ftx[i] = Tn.x / tl; ftz[i] = Tn.z / tl; }
-      const sets = [{ iPos: [], iPar: [], iCol: [] }, { iPos: [], iPar: [], iCol: [] }], snowC = new THREE.Color('#d9e1ee'), tc = new THREE.Color();
+      const half = () => ({ iPos: [], iPar: [], iCol: [] }), sets = [[half(), half()], [half(), half()]], snowC = new THREE.Color('#d9e1ee'), tc = new THREE.Color();
       const zones = [[0, 6, 6.4, 1], [6, 14, 3.0, 1.05], [14, 34, 1.3, 1.2], [34, 92, 0.3, 1.6]];   // [from m, to m, tufts per m2, size]
       let tried = 0;
       for (const [l0, l1, dens, big] of zones) {
-        const { iPos, iPar, iCol } = sets[l0 < 14 ? 0 : 1];
+        const set = sets[l0 < 14 ? 0 : 1];
         const n = Math.round((sEnd + 8) * (l1 - l0) * 2 * dens * K);
         for (let i = 0; i < n; i++) {
           const s = gr.range(0, sEnd + 8), lat = (gr() < 0.5 ? -1 : 1) * gr.range(l0, l1), yaw = gr.range(0, 6.283), sd = gr(), w = gr.range(0.78, 1.12), hgt = gr.range(0.4, 0.62), keep = gr();
@@ -861,6 +863,7 @@ export default {
           tc.copy(C.meadow).multiplyScalar(t0); tc.r *= 1 - 0.26 * hol; tc.g *= 1 - 0.34 * hol; tc.b *= 1 - 0.42 * hol;
           tc.lerp(C.moss, warm * 0.6); if (look.snow) tc.lerp(snowC, 0.4 * (1 - warm));
           const thaw = Math.max(warm, 0.7 * smoothstep(0.44, 0.64, gfbm3(x * 0.045 + 61, z * 0.045 + 61)));              // patches where the frost lies thin and the gold shows
+          const { iPos, iPar, iCol } = set[sd < 0.5 ? 0 : 1];   // (a headset draws only the first half: see tufts)
           iPos.push(x, veg(x, z) - 0.03, z, yaw); iPar.push(w * big, hgt * (0.5 + 0.5 * grow) * (big > 1.3 ? 1.25 : 1) * (look.snow ? 0.6 : 1) * (1 + 0.25 * (thaw - warm)), sd, thaw); iCol.push(tc.r, tc.g, tc.b);
         }
       }
@@ -868,7 +871,7 @@ export default {
       tuftMat = mk(TUFT_VERT, TUFT_FRAG, tuftU, { side: THREE.DoubleSide });
       await ctx.yield();
       for (let si = 0; si < 2; si++) {
-        const set = sets[si];
+        const set = { iPos: [...sets[si][0].iPos, ...sets[si][1].iPos], iPar: [...sets[si][0].iPar, ...sets[si][1].iPar], iCol: [...sets[si][0].iCol, ...sets[si][1].iCol] };
         const nc = si === 0 ? 3 : 2, pos = [], ac = [], idx = [];
         for (let k = 0; k < nc; k++) {
           const a = k * Math.PI / nc, dx = Math.cos(a) * 0.5, dz = Math.sin(a) * 0.5, sg = k % 2 ? -1 : 1, nx = -Math.sin(a) * sg, nz = Math.cos(a) * sg, b0 = k * 4;
@@ -878,8 +881,8 @@ export default {
         const g = new THREE.InstancedBufferGeometry();
         g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('aC', new THREE.Float32BufferAttribute(ac, 3)); g.setIndex(idx);
         g.setAttribute('iPos', new THREE.InstancedBufferAttribute(new Float32Array(set.iPos), 4)); g.setAttribute('iPar', new THREE.InstancedBufferAttribute(new Float32Array(set.iPar), 4)); g.setAttribute('iCol', new THREE.InstancedBufferAttribute(new Float32Array(set.iCol), 3));
-        g.instanceCount = set.iPos.length / 4;
-        const tufts = new THREE.Mesh(g, tuftMat); tufts.frustumCulled = false; scene.add(tufts);
+        g.instanceCount = set.iPos.length / 4; tufts.push({ g, all: g.instanceCount, head: sets[si][0].iPos.length / 4 });
+        const mesh = new THREE.Mesh(g, tuftMat); mesh.frustumCulled = false; scene.add(mesh);
         await ctx.yield();
       }
     }
@@ -1256,6 +1259,7 @@ export default {
     const camW = new THREE.Vector3(), sunI0 = sky.uniforms.uSun.value.y, sunG0 = sky.uniforms.uSun.value.z, jetTop = HU.uGey.value.z, eclipse = SUN.y < 0.4 && Math.abs(SUN.x) > 0.5, lowSun = SUN.y < 0.25 && SUN.x > 0.5;
     const update = (dt, time, camera, u = 0) => {
       clock.value = time;
+      const vr = !!ctx.headset?.(); for (const t of tufts) t.g.instanceCount = vr ? t.head : t.all;
       // the ridge's shadow line sinks with path position and reaches the ground as the geyser breaks out
       const lm = u * LEN, lineY = !look.line ? -100 : lm < 190 ? lerp(4.3, -1.5, lm / 190) : lerp(-1.5, -7, smoothstep(190, 237, lm));
       const sunK = gate(lineY, 0.6);

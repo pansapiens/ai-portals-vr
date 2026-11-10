@@ -1126,11 +1126,15 @@ export default {
       const wan = 0.011 * smoothstep(22.6, 25, t);        // coasting: the stack drifts slowly in attitude, nothing is ever still
       // the gaze swings slowly off the nose through the climb above the weather, so the hull runs to one lower corner, then the other
       const sw = swingAt(t) * (1 - pan);
-      q.setFromAxisAngle(Z, panSign * (Math.PI * pan + sw)).multiply(qAft);
-      // through the pan the view dips towards the skin, so the hull's curve stays along the bottom of the frame
-      q.multiply(q2.setFromAxisAngle(X, -12 * DEG * pan - 7 * DEG * smoothstep(29.5, 38, t) - 10 * DEG * Math.sin(Math.PI * pan) + shake * Math.sin(time * 69.1) * Math.sin(time * 7.3 + 1) + wan * Math.sin(time * 0.9 + 1)));
-      q.multiply(q2.setFromAxisAngle(Z, 25 * DEG * pan - panSign * 0.3 * sw + shake * 0.7 * Math.sin(time * 61.7 + 2) + wan * 0.8 * Math.sin(time * 0.7)));
-      q.multiply(q2.setFromAxisAngle(Y, shake * 0.8 * Math.sin(time * 75.4 + 4) + wan * Math.sin(time * 1.1 + 2)));
+      // in a headset the viewer turns their own head: the seat holds still (no swing, dip or shake) and the pan is one snap turn
+      if (ctx.headset?.()) q.setFromAxisAngle(Z, panSign * Math.PI * (pan > 0.5 ? 1 : 0)).multiply(qAft);
+      else {
+        q.setFromAxisAngle(Z, panSign * (Math.PI * pan + sw)).multiply(qAft);
+        // through the pan the view dips towards the skin, so the hull's curve stays along the bottom of the frame
+        q.multiply(q2.setFromAxisAngle(X, -12 * DEG * pan - 7 * DEG * smoothstep(29.5, 38, t) - 10 * DEG * Math.sin(Math.PI * pan) + shake * Math.sin(time * 69.1) * Math.sin(time * 7.3 + 1) + wan * Math.sin(time * 0.9 + 1)));
+        q.multiply(q2.setFromAxisAngle(Z, 25 * DEG * pan - panSign * 0.3 * sw + shake * 0.7 * Math.sin(time * 61.7 + 2) + wan * 0.8 * Math.sin(time * 0.7)));
+        q.multiply(q2.setFromAxisAngle(Y, shake * 0.8 * Math.sin(time * 75.4 + 4) + wan * Math.sin(time * 1.1 + 2)));
+      }
       // Seen through a portal the engine clips everything nearer than the opening. Scaling the whole world about the
       // lens leaves the picture exactly as it is, so the opening shows the docked first frame: grow the world until
       // its nearest part clears the opening (up to 200 times), stand back for whatever is left, dock as the viewer arrives.

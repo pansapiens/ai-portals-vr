@@ -9,7 +9,7 @@
 import * as THREE from 'three';
 
 const Y = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1);
-const _f = new THREE.Vector3(), _p = new THREE.Vector3(), _v = new THREE.Vector3(), _v4 = new THREE.Vector4(), _q = new THREE.Quaternion();
+const _f = new THREE.Vector3(), _v = new THREE.Vector3(), _v4 = new THREE.Vector4(), _q = new THREE.Quaternion();
 const _M = new THREE.Matrix4(), _C = new THREE.Matrix4();
 // the most of the headset's own resolution the picture is drawn at, by graphics level; the engine's governor lowers it (scale)
 // while frames miss the headset's rate, and the next world in the portal is drawn at PORTAL_SCALE of that
@@ -53,21 +53,22 @@ export class XRView {
   // called at the start of each animation frame: three has just set the headset's buffer as the render target
   begin() { const x = this.e.renderer.xr; this.target = x.isPresenting ? this.e.renderer.getRenderTarget() : null; }
 
-  // The route's pose (cam's position, the eased gaze q) becomes the rig; cam becomes the head, for the engine and the worlds.
+  // The route's pose (cam's position, the eased gaze q) becomes the rig, and cam is left holding the rig: the engine and the
+  // worlds see the body, not the head. A world that fixes things to its camera (a seat on a rocket, a ride, a companion)
+  // then keeps them still while the viewer looks round; only the eyes carry the head's own pose.
   pose(cam, q) {
     _f.set(0, 0, -1).applyQuaternion(q);
     if (_f.x * _f.x + _f.z * _f.z > 0.01) this.yaw = Math.atan2(-_f.x, -_f.z);   // straight up or down: keep the last heading
     _q.setFromAxisAngle(Y, this.yaw); this.rig.compose(cam.position, _q, ONE);
-    const xc = this.e.renderer.xr.getCamera().cameras; _p.set(0, 0, 0);
+    const xc = this.e.renderer.xr.getCamera().cameras;
     xc.forEach((c, i) => {
       if (!this.eyes[i]) { this.eyes[i] = newCam(); this.pcs[i] = newCam(); this.pv[i] = new THREE.Matrix4(); this.toVP[i] = new THREE.Matrix4(); }
       place(this.eyes[i], _M.multiplyMatrices(this.rig, c.matrix));
-      _p.add(this.eyes[i].position);
       // clip space of a whole picture to the part of the buffer that holds eye i (for the portal's look-up of the next world)
       const t = this.target, v = c.viewport, fx = v.x / t.width, fw = v.z / t.width, fy = v.y / t.height, fh = v.w / t.height;
       this.toVP[i].set(fw, 0, 0, 2 * fx + fw - 1, 0, fh, 0, 2 * fy + fh - 1, 0, 0, 1, 0, 0, 0, 0, 1);
     });
-    cam.position.copy(_p.divideScalar(xc.length)); cam.quaternion.copy(_q).multiply(xc[0].quaternion);
+    cam.quaternion.copy(_q);
     const e = xc[0].projectionMatrix.elements; cam.fov = 2 * Math.atan(1 / e[5]) * 180 / Math.PI; cam.aspect = e[5] / e[0];
   }
 
@@ -108,8 +109,12 @@ export class XRView {
       box[i] = [x0, x1, y0, y1];
       this.pv[i].multiplyMatrices(pc.projectionMatrix, _C).premultiply(this.toVP[i]);
     });
+    // B's update() is handed the rig carried through the opening (as A's is handed the rig), with eye 0's lens
+    const pb = this.pb || (this.pb = newCam()), p0 = this.pcs[0];
+    place(pb, _C.multiplyMatrices(_M, this.rig)); pb.near = p0.near; pb.far = p0.far; pb.fov = e.camera.fov; pb.aspect = e.camera.aspect;
+    pb.projectionMatrix.copy(p0.projectionMatrix); pb.projectionMatrixInverse.copy(p0.projectionMatrixInverse);
     B.time += dt;
-    if (!(B._ran && e.settings.paused)) { B._ran = true; try { B.world.update?.(dt, B.time, this.pcs[0], 0); } catch (err) { if (!B._err) { B._err = 1; console.error(err); } } }
+    if (!(B._ran && e.settings.paused)) { B._ran = true; try { B.world.update?.(dt, B.time, pb, 0); } catch (err) { if (!B._err) { B._err = 1; console.error(err); } } }
     this._eyes((c, i) => {
       this._viewport(rt, c);
       // only the opening's box (grown a little: the looks read the picture just outside the rim), within this eye's part

@@ -216,6 +216,9 @@ export class Engine {
       // the viewer's graphics level: detail (0.6 on low, 0.8 on medium, 1 above) is a hint for thinning particles,
       // instances and ray-march steps; never use it to remove the things a world is about
       quality: { level: this.tier, detail: TIERS[this.tier].detail, mobile: this.mobile },
+      // true while a headset draws the picture (read it in update(): a session can start or end at any time). The camera a
+      // world is handed then holds the route's pose, not the head's, so what a world fixes to it stays put as the viewer looks round
+      headset: () => this.xr.on,
       // flight.rate: how many times the world's own pace the flight runs at this frame, read in update(): 1 at the usual
       // pace and in every still; the viewer's Pace setting (0.4 to 2.5), times 5 while hurrying to the portal (2 on a calm
       // journey), eased as the speed is; under 1 while the flight waits before a portal with no world behind it yet. For a
