@@ -24,6 +24,21 @@ function project(out, c, near, far) {
   out.projectionMatrix.makePerspective(l * near, r * near, t * near, b * near, near, far);
   out.projectionMatrixInverse.copy(out.projectionMatrix).invert();
 }
+// camera.viewCamera, for the worlds' visibility checks (frustum culling, warming what comes into view): the union of the eyes'
+// views, from their midpoint, facing as eye 0, with near and far of our own. (The camera handed to update() is the rig, which
+// does not turn with the head: a world that culls by it would drop what the viewer turns to look at.) As in andybak/ai-portals.
+// ponytail: the union is taken from the midpoint with the outer eyes' slopes, so it misses the 3 cm beside each eye at the near plane
+function union(out, a, b, pa, pb, near, far) {
+  const ea = pa.elements, eb = pb.elements;
+  const l = Math.min((ea[8] - 1) / ea[0], (eb[8] - 1) / eb[0]), r = Math.max((ea[8] + 1) / ea[0], (eb[8] + 1) / eb[0]);
+  const bt = Math.min((ea[9] - 1) / ea[5], (eb[9] - 1) / eb[5]), t = Math.max((ea[9] + 1) / ea[5], (eb[9] + 1) / eb[5]);
+  _v.setFromMatrixPosition(a.matrixWorld).add(_f.setFromMatrixPosition(b.matrixWorld)).multiplyScalar(0.5);
+  place(out, _M.compose(_v, a.quaternion, ONE));
+  out.near = near; out.far = far; out.fov = 2 * Math.atan(Math.max(t, -bt)) * 180 / Math.PI; out.aspect = (r - l) / (t - bt);
+  out.projectionMatrix.makePerspective(l * near, r * near, t * near, bt * near, near, far);
+  out.projectionMatrixInverse.copy(out.projectionMatrix).invert();
+  return out;
+}
 const newCam = () => { const c = new THREE.PerspectiveCamera(); c.matrixAutoUpdate = false; return c; };
 
 export class XRView {
@@ -69,6 +84,8 @@ export class XRView {
       this.toVP[i].set(fw, 0, 0, 2 * fx + fw - 1, 0, fh, 0, 2 * fy + fh - 1, 0, 0, 1, 0, 0, 0, 0, 1);
     });
     cam.quaternion.copy(_q);
+    const n = xc.length - 1, ve = this.ve || (this.ve = newCam());
+    cam.viewCamera = union(ve, this.eyes[0], this.eyes[n], xc[0].projectionMatrix, xc[n].projectionMatrix, cam.near, cam.far);
     const e = xc[0].projectionMatrix.elements; cam.fov = 2 * Math.atan(1 / e[5]) * 180 / Math.PI; cam.aspect = e[5] / e[0];
   }
 
@@ -113,6 +130,8 @@ export class XRView {
     const pb = this.pb || (this.pb = newCam()), p0 = this.pcs[0];
     place(pb, _C.multiplyMatrices(_M, this.rig)); pb.near = p0.near; pb.far = p0.far; pb.fov = e.camera.fov; pb.aspect = e.camera.aspect;
     pb.projectionMatrix.copy(p0.projectionMatrix); pb.projectionMatrixInverse.copy(p0.projectionMatrixInverse);
+    const n = xc.length - 1, vb = this.vb || (this.vb = newCam());
+    pb.viewCamera = union(vb, this.pcs[0], this.pcs[n], this.pcs[0].projectionMatrix, this.pcs[n].projectionMatrix, p0.near, p0.far);
     B.time += dt;
     if (!(B._ran && e.settings.paused)) { B._ran = true; try { B.world.update?.(dt, B.time, pb, 0); } catch (err) { if (!B._err) { B._err = 1; console.error(err); } } }
     this._eyes((c, i) => {

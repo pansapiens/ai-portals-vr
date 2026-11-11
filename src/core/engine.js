@@ -864,7 +864,8 @@ export class Engine {
     if (!this.camInit || frozen) { this.camQuat.copy(_q); this.camInit = true; }
     else { this.arrived += dt; this._turn(this.camQuat, _q, dt); }
     cam.quaternion.copy(this.camQuat);
-    if (xr) this.xr.pose(cam, this.camQuat);   // the route's pose becomes the rig; cam is now the viewer's head
+    if (xr) this.xr.pose(cam, this.camQuat);   // the route's pose becomes the rig (cam.viewCamera: what the eyes see, for culling)
+    else cam.viewCamera = null;
 
     // a feed world shows the next world itself, so its opening is open as soon as there is a next world
     const revealT = B ? (A.feed ? 1 : 1 - smoothstep(A.revealDist * 0.6, A.revealDist, remaining)) : 0;
