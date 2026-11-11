@@ -1537,7 +1537,8 @@ export default {
           const amt = smoothstep(0.0, 0.012, uNow) * (1 - smoothstep(0.985, 1, uNow));
           bee.visible = amt > 0.001;
           camera.matrixWorld.decompose(bee.position, bee.quaternion, _bs);
-          for (let i = 0; i < ants.length; i++) { const a = ants[i]; a.rotation.x = (1 - amt) * -0.5 + 0.05 * Math.sin(time * 2.3 + i * 1.7) + 0.02 * Math.sin(time * 7.1 + i); a.rotation.z = 0.04 * Math.sin(time * 1.7 + i * 2.2); }
+          const vr = !!ctx.headset?.();   // in a headset the antennae hang in front of the head with nothing joining them to it
+          for (let i = 0; i < ants.length; i++) { const a = ants[i]; a.visible = !vr; a.rotation.x = (1 - amt) * -0.5 + 0.05 * Math.sin(time * 2.3 + i * 1.7) + 0.02 * Math.sin(time * 7.1 + i); a.rotation.z = 0.04 * Math.sin(time * 1.7 + i * 2.2); }
           blurU.uA.value = amt * (0.15 + 0.05 * Math.sin(time * 53) * Math.sin(time * 31));
         }
       },

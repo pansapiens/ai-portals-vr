@@ -235,7 +235,11 @@ async function boot() {
   const root = document.documentElement, fsOn = root.requestFullscreen || root.webkitRequestFullscreen, fsOff = document.exitFullscreen || document.webkitExitFullscreen;
   const full = () => { try { if (document.fullscreenElement || document.webkitFullscreenElement) fsOff.call(document); else { const r = fsOn.call(root); if (r && r.catch) r.catch(() => {}); } } catch (e) {} };
   // a headset (Meta Quest's browser and others with WebXR): the button appears only where a VR session can be had
-  XRView.supported().then((ok) => { if (!ok) return; const b = $('b-vr'); b.style.display = ''; b.onclick = () => engine.xr.toggle().catch((e) => console.warn('vr', e)); });
+  XRView.supported().then((ok) => { if (!ok) return; const b = $('b-vr'); b.style.display = ''; b.onclick = () => {
+    // entering VR turns the sound on (this click lets audio start; inside the headset the sound button cannot be reached)
+    if (!engine.renderer.xr.getSession() && !$('b-sound').classList.contains('on')) sound();
+    engine.xr.toggle().catch((e) => console.warn('vr', e));
+  }; });
   if (fsOn) $('b-full').onclick = full; else $('b-full').style.display = 'none';   // an iPhone has no fullscreen: add the page to the home screen instead
   const bSound = $('b-sound');
   const sound = async () => {

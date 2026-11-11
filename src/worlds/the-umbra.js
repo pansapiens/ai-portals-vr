@@ -452,7 +452,8 @@ async function buildResearchJet(ctx) {
   const fs = [];
   for (let i = 0; i <= 8; i++) { const f = i / 8; fs.push({ x: lerp(-4.7, -0.55, f), y: 0, zle: -2.6 + 2.3 * f, chord: lerp(3.6, 1.3, f), thick: 0.08 }); }
   M.wing(fs, 12, (si) => (si >= 5 && si <= 6 ? 5 : 0), null, true);
-  M.tube(-0.5, 0.45, 6, 8, (t) => 0.1 * Math.sin(Math.PI * clamp(t, 0.1, 0.9)) + 0.02, () => [0, -0.32], 1);        // the pod's mast fairing
+  // the pod's mast fairing, a mesh of its own: in a headset it sits right under the viewer's head, so it is hidden there
+  const P = makeMesher(); P.tube(-0.5, 0.45, 6, 8, (t) => 0.1 * Math.sin(Math.PI * clamp(t, 0.1, 0.9)) + 0.02, () => [0, -0.32], 1);
   // blade antennae and a dorsal dome
   for (const [z, h] of [[-11.6, 0.42], [-8.9, 0.36], [-5.2, 0.3]]) {
     const bs = [{ x: AX + 0.6, y: 0, zle: z, chord: 0.42, thick: 0.14 }, { x: AX + 0.6 + h, y: 0, zle: z + 0.16, chord: 0.2, thick: 0.12 }];
@@ -462,7 +463,7 @@ async function buildResearchJet(ctx) {
   await ctx.yield();
   const geometry = M.geometry();
   await ctx.yield();
-  return { geometry, axis: AX };
+  return { geometry, pod: P.geometry(), axis: AX };
 }
 
 // A twin (chase WB-57 type) or four-engined (airliner) jet, nose toward -Z, origin at the centre of the wing.
@@ -923,6 +924,7 @@ export default {
     const jet = await buildResearchJet(ctx);
     const jetMat = acMaterial(LIV[livery], 15.5, jet.axis, [1.12, 1.36, 0.035]);
     const jetMesh = new THREE.Mesh(jet.geometry, jetMat); jetMesh.frustumCulled = false; rig.add(jetMesh);
+    const podMesh = new THREE.Mesh(jet.pod, jetMat); podMesh.frustumCulled = false; rig.add(podMesh);
     const AX = jet.axis;
     const jetLamps = makeLamps([
       { p: [0, AX + 1.0, -9.6], c: [3.4, 0.9, 1.6], size: 0.62, blink: [1.2, 0, 14] },          // the rose beacon, once every 1.2 s
@@ -1063,6 +1065,7 @@ export default {
       fwd.copy(tan).multiplyScalar(0.7).addScaledVector(gaze, 0.3).normalize();
       orient(rig, fwd, Math.asin(clamp(cr.y, -1, 1)) * 1.3 + 0.01 * Math.sin(time * 0.9));
       rig.position.copy(camP);
+      podMesh.visible = !ctx.headset?.();
       const ail = clamp(-turn * 0.5, -0.14, 0.14) + 0.02 * Math.sin(time * 3.1) + 0.012 * Math.sin(time * 7.3);
       jetMat.uniforms.uCtl.value.set(ail, -ail, at * 0.5 + 0.03 * Math.max(0, Math.sin(time * 2.7)), 0.3 + at * 2.2 + 0.2 * Math.sin(time * 2.1) + 0.12 * Math.sin(time * 3.7 + 1));
       jetLamps.uniforms.uGain.value = lerp(1.5, 0.7, light);
