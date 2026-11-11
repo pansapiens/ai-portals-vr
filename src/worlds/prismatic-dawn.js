@@ -92,7 +92,7 @@ void main(){
 const LAND_FRAG = /* glsl */`
 varying vec3 vW, vN;
 uniform vec3 uCSinter, uCMeadow, uCFrost, uCMoss, uCDark, uCRust, uCOra, uCYel;
-uniform vec3 uForest, uRock, uSnowCol, uFum[10], uPots[5], uPools[4];
+uniform vec3 uForest, uRock, uSnowCol, uFum[10], uPots[5], uPools[4], uFan;
 uniform vec4 uWallow;
 uniform float uFrost, uSnow, uWaterY, uEdge;
 #include <fog_pars_fragment>
@@ -101,14 +101,43 @@ ${GLSL_BRAID}
 void main(){
   vec2 p = vW.xz;
   float px = max(length(dFdx(p)), length(dFdy(p))), h = vW.y;
+  // the terms that take screen derivatives come first, so every pixel of a 2x2 quad still runs them (see the return below)
+  float n1 = fbm3b(p*0.06 + 3.1, 16.7, px), fst = fwidth(n1*2.75), r0 = length(p);
+  vec2 dirp = p/max(r0, 1e-3);
+  vec2 bw = vec2(fbm2(p*0.035 + 21.), fbm2(p*0.035 + 57.)) - 0.5;
+  vec2 rq = dirp*21. + vec2(r0*0.085, -r0*0.055) + bw*5. + uSeed.xy;
+  vec2 brA = braid(vnoise(rq), vnoise(rq*2.3 + bw*3.5 + 13.));
+  // Where the hero's ground sheet (the plane y = 0, above this ground under its footprint) is opaque, this ground is never seen.
+  // The test is made where the line of sight crosses the sheet (a low view looks through it metres nearer than this point),
+  // with the sheet's footprint sR and alpha exactly as GROUND_FRAG works them out (its quad, river cut, summer edge), a margin inside
+  vec3 dv = vW - cameraPosition;
+  vec2 ps = cameraPosition.xz - dv.xz*(cameraPosition.y/min(dv.y, -1e-4));
+  if (h < -0.01 && cameraPosition.y > 0. && ps.x > -195. && ps.x < 292. && ps.y > -195. && ps.y < 258. && (uRiver.w > 0. ? riverD(ps) : 99.) > 2.5){
+    float t0, d = eyeD(ps, t0), a = dot(ps, uFan.xy), c = dot(ps, vec2(-uFan.y, uFan.x));
+    float sFan = max(max(abs(c) - (12. + max(a, 0.)*0.24), a - 205.), -a);
+    float sR = min(min(d - 116., length(ps - uGey.xy) - 46.), sFan) + (fbm3(ps*0.013 + uSeed.zw*1.7) - 0.5)*30. + (vnoise(ps*0.07 + 9.) - 0.5)*10.;
+    if (d > 40.5 && sR < mix(19., -6.5 - 1.6*px, uEdge)){ gl_FragColor = vec4(uCSinter*uSkyCol, 1.); return; }
+  }
   // as in the hero's ground: no detail term outlives its own resolution, and relief shading stays close to the camera
   float mid = 1. - smoothstep(0.6, 3.0, px), rel = 1. - smoothstep(0.10, 0.34, px);
-  float n1 = fbm3b(p*0.06 + 3.1, 16.7, px), n2 = fbm3b(p*0.33 + 11., 3.03, px), n3 = bnz(p*2.6, 0.385, px);
+  float n2 = fbm3b(p*0.33 + 11., 3.03, px), n3 = bnz(p*2.6, 0.385, px);
   float nA = fbm3(p*0.011 + uSeed.xy), nF = fbm3(p*0.02 + 5.);
   vec3 N = normalize(vN + vec3(0., 1e-4, 0.));
   float up = smoothstep(4., 30., h), slope = 1. - N.y;
   // cured meadow, darker sedge hollows, pale sinter flats, game trails
-  vec3 grass = uCMeadow*meadowTone(p, px);
+  float sint = smoothstep(0.57, 0.68, nA + (n1 - 0.5)*0.22);
+  // the flats round the spring are sinter out to some 300 m, with islands of frosted grass standing on them
+  float flatM = (1. - smoothstep(215., 315., r0 + (nA - 0.5)*90.))*smoothstep(0.36, 0.5, fbm3(p*0.017 + uSeed.yx + 9.) + 0.3*(1. - smoothstep(120., 210., r0)));
+  sint = max(sint, flatM);
+  sint *= smoothstep(30., 75., length(vec2(p.x - 128., max(abs(p.y - 212.) - 62., 0.))));     // the bank run is meadow, not a sinter flat
+  // summer: green grass against pale sinter. The boundary is broken at tussock scale (clumps three metres and half a metre
+  // across) and kept a metre or two wide, so the grass stands on the flats as islands with edges, not as soft green smears
+  float eW = clamp(0.07 + px*0.05, 0.07, 0.5);
+  sint = mix(sint, smoothstep(0.5 - eW, 0.5 + eW, sint + (n2 - 0.5)*0.55 + (n3 - 0.5)*0.24*mid), uEdge);
+  // (each block below is skipped where its weight is nil; none holds a screen derivative, so the branches are safe)
+  vec3 grass = vec3(0.);
+  if (sint < 1. || up > 0.){
+  grass = uCMeadow*meadowTone(p, px);
   // from the air the meadow is stippled, not smooth: tussocks a metre apart and sedge clumps four metres apart, each a pale
   // crown with its own small shadow on the side away from the sun; each scale fades to its mean before it can alias
   {
@@ -120,32 +149,20 @@ void main(){
     float c2 = 1. - smoothstep(0.1, 0.3, length(uf - uo)), s2 = 1. - smoothstep(0.1, 0.34, length(uf - uo + uSunXZ*0.2));
     grass *= 1. + k1*(0.42*c1 - 0.3*s1*(1. - c1)) + k2*(0.3*c2 - 0.34*s2*(1. - c2));
   }
-  float sint = smoothstep(0.57, 0.68, nA + (n1 - 0.5)*0.22);
-  // the flats round the spring are sinter out to some 300 m, with islands of frosted grass standing on them
-  float r0 = length(p);
-  float flatM = (1. - smoothstep(215., 315., r0 + (nA - 0.5)*90.))*smoothstep(0.36, 0.5, fbm3(p*0.017 + uSeed.yx + 9.) + 0.3*(1. - smoothstep(120., 210., r0)));
-  sint = max(sint, flatM);
-  sint *= smoothstep(30., 75., length(vec2(p.x - 128., max(abs(p.y - 212.) - 62., 0.))));     // the bank run is meadow, not a sinter flat
-  // summer: green grass against pale sinter. The boundary is broken at tussock scale (clumps three metres and half a metre
-  // across) and kept a metre or two wide, so the grass stands on the flats as islands with edges, not as soft green smears
-  float eW = clamp(0.07 + px*0.05, 0.07, 0.5);
-  sint = mix(sint, smoothstep(0.5 - eW, 0.5 + eW, sint + (n2 - 0.5)*0.55 + (n3 - 0.5)*0.24*mid), uEdge);
+  }
   vec3 sinter = uCSinter*(0.64 + 0.32*n1 + 0.10*(n2 - 0.5)*mid);
   sinter = mix(sinter, sinter*vec3(0.78, 0.87, 1.0), (1. - smoothstep(0.22, 0.5, n1))*0.8);
   // terraces: stepped rimstone with a film of water standing behind every lip, and the spring's braided runoff carried on
   // across them in the same strands the hero's sheet draws (same lookup, so they join)
-  vec4 ter = terraces(p, px);
-  vec2 dirp = p/max(r0, 1e-3);
-  vec2 bw = vec2(fbm2(p*0.035 + 21.), fbm2(p*0.035 + 57.)) - 0.5;
-  vec2 rq = dirp*21. + vec2(r0*0.085, -r0*0.055) + bw*5. + uSeed.xy;
-  vec2 brA = braid(vnoise(rq), vnoise(rq*2.3 + bw*3.5 + 13.));
+  vec4 ter = vec4(1., 0., 0., 0.);
+  if (sint > 0.) ter = terraces(p, px);
   float allM = smoothstep(84., 110., r0)*(1. - smoothstep(210., 300., r0))*smoothstep(0.4, 0.62, fbm2(dirp*2.1 + uSeed.xy + 5.))*0.9;
-  sinter = mix(sinter, mix(uCOra, uCRust, 0.45)*(0.75 + 0.4*n2), smoothstep(0.45, 0.95, ter.w)*smoothstep(0.3, 0.6, fbm2(p*0.031 + 17.))*0.8*flatM);
+  if (sint > 0.) sinter = mix(sinter, mix(uCOra, uCRust, 0.45)*(0.75 + 0.4*n2), smoothstep(0.45, 0.95, ter.w)*smoothstep(0.3, 0.6, fbm2(p*0.031 + 17.))*0.8*flatM);
   sinter = mix(sinter, sinter*vec3(0.5, 0.78, 0.96) + vec3(0., 0.03, 0.07), ter.y*0.85);
   sinter = mix(sinter, mix(uCRust*1.05, uCOra, brA.y), brA.y*allM*0.8);
   sinter = mix(sinter, mix(uCYel*0.9, vec3(0.75, 0.80, 0.78), 0.5), brA.x*allM*0.85);
   float terK = sint*(1. - brA.y*allM);
-  float st = n1*2.75, stf = fract(st), fst = fwidth(st), wst = max(0.1, 2.5*fst);
+  float st = n1*2.75, stf = fract(st), wst = max(0.1, 2.5*fst);
   sinter *= 1. - 0.25*smoothstep(1. - wst, 1. - wst*0.35, stf)*(1. - smoothstep(1. - clamp(fst, 0.002, 0.3), 1., stf))*(0.1/wst)*(1. - smoothstep(0.12, 0.3, fst))*mid;
   vec3 colr = mix(grass, sinter, sint);
   float tr = 1. - abs(2.*vnoise(p*0.021 + uSeed.zw) - 1.);
@@ -186,7 +203,7 @@ void main(){
   colr = mix(colr, vec3(0.20, 0.155, 0.11)*(0.7 + 0.6*n2), wl*0.85);
   float rd = riverD(p);
   float bank = 1. - smoothstep(-0.5, 4.5, rd + (n2 - 0.5)*2.);
-  vec3 gravel = mix(vec3(0.10, 0.10, 0.10), vec3(0.36, 0.33, 0.29), bnz(p*3.1, 0.32, px)*0.55 + n2*0.45);
+  vec3 gravel = bank > 0. ? mix(vec3(0.10, 0.10, 0.10), vec3(0.36, 0.33, 0.29), bnz(p*3.1, 0.32, px)*0.55 + n2*0.45) : vec3(0.);
   warm = max(max(warm, wl), 1. - smoothstep(-1., 7., rd + (n1 - 0.5)*6.));
   colr = mix(colr, uCMoss*(0.75 + 0.5*n2), warm*0.8*(1. - sint*0.5)*(1. - wl));
   colr = mix(colr, gravel, bank*0.9);
@@ -194,11 +211,13 @@ void main(){
   // hoar frost stops dead at the warm halos
   float fr = clamp((1. - warm)*uFrost*(0.28 + 0.35*n1 + 0.25*(1. - sint)), 0., 0.6)*(1. - 0.45*(1. - smoothstep(215., 315., r0))*(1. - sint));
   // ridges: lodgepole forest, pale talus on the steeps, a few open parks
-  vec3 forest = uForest*(0.8 + 1.5*fbm3(p*0.09 + 31.))*(0.8 + 0.4*vnoise(p*vec2(0.7, 0.21)));
   float rk = smoothstep(0.30, 0.48, slope + (nF - 0.5)*0.3);
-  vec3 ridge = mix(forest, uRock*(0.65 + 0.5*n1), rk);
-  ridge = mix(ridge, grass*0.85, smoothstep(0.6, 0.7, nF)*(1. - rk)*0.75);
-  colr = mix(colr, ridge, up);
+  if (up > 0.){
+    vec3 forest = uForest*(0.8 + 1.5*fbm3(p*0.09 + 31.))*(0.8 + 0.4*vnoise(p*vec2(0.7, 0.21)));
+    vec3 ridge = mix(forest, uRock*(0.65 + 0.5*n1), rk);
+    ridge = mix(ridge, grass*0.85, smoothstep(0.6, 0.7, nF)*(1. - rk)*0.75);
+    colr = mix(colr, ridge, up);
+  }
   fr *= 1. - up*0.9;
   colr = mix(colr, uCFrost*(0.80 + 0.15*n3), fr);
   float sn = uSnow*smoothstep(0.2, 0.55, N.y - rk*0.5 + (n1 - 0.5)*0.3)*(1. - warm)*(1. - 0.55*up*(1. - rk));
@@ -709,7 +728,8 @@ export default {
     const veg = (x, z) => lerp(-0.02, groundH(x, z), Math.max(smoothstep(20, 40, sheet(x, z)), smoothstep(3, 0.5, riverD(x, z))));     // what plants and hooves stand on
 
     // ---- sky, fog, the two lights the kit plants need (everything else is lit by the hero's uniforms)
-    const sky = makeSky({ rng, bake: true, renderer: ctx.renderer, ...look.sky, sunElevation: lookName === 'night' ? -30 : look.sun[0], sunAzimuth: look.sun[1] });
+    // the sky after the land (renderOrder 0.4) and before the 0.5 meshes: only the pixels nothing else covers run its shader
+    const sky = makeSky({ rng, bake: true, renderer: ctx.renderer, renderOrder: 0.45, ...look.sky, sunElevation: lookName === 'night' ? -30 : look.sun[0], sunAzimuth: look.sun[1] });
     scene.add(sky.object);
     await ctx.yield();
     scene.fog = new THREE.FogExp2(new THREE.Color(look.fog[0]), look.fog[1]);
@@ -781,7 +801,7 @@ export default {
       }
       g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
       await ctx.yield();
-      const land = new THREE.Mesh(g, mk(LAND_VERT, LAND_FRAG, landU)); land.renderOrder = -8; land.frustumCulled = false; scene.add(land);
+      const land = new THREE.Mesh(g, mk(LAND_VERT, LAND_FRAG, landU)); land.renderOrder = 0.4; land.frustumCulled = false; scene.add(land);     // after the herd, tussocks and pines (order 0): what they cover is never shaded
       const axs = Float32Array.from({ length: N + 1 }, (_, i) => ax(i));
       const cell = (v) => { let lo = 0, hi = N - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (axs[m] <= v) lo = m; else hi = m - 1; } return lo; };
       meshH = (x, z) => {

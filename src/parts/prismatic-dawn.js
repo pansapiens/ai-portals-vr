@@ -92,7 +92,8 @@ float fbm3(vec2 p){ return vnoise(p)*.5714 + vnoise(p*2.07 + 17.13)*.2857 + vnoi
 float fbm4(vec2 p){ return vnoise(p)*.5333 + vnoise(p*2.07 + 17.13)*.2667 + vnoise(p*4.19 + 41.7)*.1333 + vnoise(p*8.31 + 7.9)*.0667; }
 // band-limited noise: an octave whose lattice cell (cell, metres) shrinks under about three pixels (px = metres per pixel) is
 // replaced by its mean, so nothing in the ground turns into per-pixel speckle from the air
-float bnz(vec2 q, float cell, float px){ return mix(0.5, vnoise(q), 1. - smoothstep(cell*0.2, cell*0.45, px)); }
+// (the lookup is skipped once the octave has gone: no derivatives in here, so the branch is safe)
+float bnz(vec2 q, float cell, float px){ float k = 1. - smoothstep(cell*0.2, cell*0.45, px); if (k <= 0.) return 0.5; return mix(0.5, vnoise(q), k); }
 float fbm2b(vec2 q, float cell, float px){ return bnz(q, cell, px)*.6667 + bnz(q*2.07 + 17.13, cell/2.07, px)*.3333; }
 float fbm3b(vec2 q, float cell, float px){ return bnz(q, cell, px)*.5714 + bnz(q*2.07 + 17.13, cell/2.07, px)*.2857 + bnz(q*4.19 + 41.7, cell/4.19, px)*.1429; }
 // tone of the meadow floor (a multiplier on the meadow colour): tussock mottling, darker sedge hollows, thatch up close.
@@ -148,8 +149,9 @@ float geyShadow(vec2 p){
   float s = -dot(q, uSunXZ), t = dot(q, vec2(-uSunXZ.y, uSunXZ.x));
   float H = max(uGey.z, 0.5), h = s/max(uShadowLen, 0.01);
   float v = clamp(h/H, 0., 1.4);
-  float wob = fbm2(vec2(s*0.014 - uTime*0.06, t*0.04 + 3.)) - 0.5;
   float w = 1.6 + 5.5*v + 8.*smoothstep(0.55, 1.1, v);
+  if (s <= 0. || v >= 1.3 || abs(t) >= w*2.3 + 1.2 + s*0.012) return 0.;     // outside the band even at its widest wobble (|wob| <= 0.5)
+  float wob = fbm2(vec2(s*0.014 - uTime*0.06, t*0.04 + 3.)) - 0.5;
   float m = 1. - smoothstep(w*0.45, w*1.5 + 1.2 + max(s, 0.)*0.012, abs(t + wob*w*1.6));
   m *= smoothstep(0., 4., s) * (1. - smoothstep(0.85, 1.3, v));
   return m*(0.7 + 0.25*fbm2(vec2(s*0.05 - uTime*0.35, t*0.2)));
@@ -247,6 +249,9 @@ void main(){
   float rvd = uRiver.w > 0. ? riverD(p) : 99.;
   alpha *= smoothstep(-0.6, 2.4, rvd);
   if (alpha < 0.004) discard;
+  // summer, past the broken edge: meadow = 1 below, so alpha*(1 - meadow) = 0. Nothing is drawn, but the depth is still written
+  // (not discard): the invisible sheet has always hidden the river's surface over the near bank, and the bank is meant to show
+  if (uEdge > 0.5 && sR > 7.3 + max(0.8, px*1.6)){ gl_FragColor = vec4(0.); return; }
   // every detail term is faded out before its feature is smaller than about three pixels: from 100 m up a pixel is 0.3 m
   float mid = 1. - smoothstep(0.6, 3.0, px);
   float rel = 1. - smoothstep(0.07, 0.22, px);           // relief shading only where the relief itself is resolved
@@ -256,8 +261,12 @@ void main(){
   // sinter: pale crust, low stepped terracettes, cool damp hollows
   float st = n1*2.75, stf = fract(st), fst = fwidth(st);
   float T0 = floor(st) + smoothstep(0.7, 1., stf);
-  float stx = fbm3((p + vec2(0.5, 0.))*0.06 + 3.1)*2.75, stz = fbm3((p + vec2(0., 0.5))*0.06 + 3.1)*2.75;
-  vec2 gT = (vec2(floor(stx) + smoothstep(0.7, 1., fract(stx)), floor(stz) + smoothstep(0.7, 1., fract(stz))) - T0)*(0.07/0.5);
+  // (blocks below behind an if are skipped where their weight is nil; none holds a screen derivative, so the branches are safe)
+  vec2 gT = vec2(0.);
+  if (rel > 0.){
+    float stx = fbm3((p + vec2(0.5, 0.))*0.06 + 3.1)*2.75, stz = fbm3((p + vec2(0., 0.5))*0.06 + 3.1)*2.75;
+    gT = (vec2(floor(stx) + smoothstep(0.7, 1., fract(stx)), floor(stz) + smoothstep(0.7, 1., fract(stz))) - T0)*(0.07/0.5);
+  }
   float wst = max(0.1, 2.5*fst);
   float tline = smoothstep(1. - wst, 1. - wst*0.35, stf)*(1. - smoothstep(1. - clamp(fst, 0.002, 0.3), 1., stf))*(0.1/wst)*(1. - smoothstep(0.12, 0.3, fst));
   float H = (n3 - 0.5)*0.008 + (n2 - 0.5)*0.03;
@@ -291,7 +300,7 @@ void main(){
   // rimstone scallops on the shelf and the inner skirt: concentric lips whose spacing doubles with distance (two levels
   // cross-faded), so a lip is always at least 2.5 pixels wide and the lips at least 7 pixels apart
   float tz = smoothstep(44., 49., d)*(1. - smoothstep(58., 70., m));
-  float sc0 = d*0.55 + vnoise(p*0.33 + 2.)*3.0 + bnz(p*0.9, 1.1, px)*1.2;
+  float sc0 = tz > 0. ? d*0.55 + vnoise(p*0.33 + 2.)*3.0 + bnz(p*0.9, 1.1, px)*1.2 : 0.;
   float fsc = max(px*0.9, 1e-4);
   float lvl = clamp(log2(fsc*7.), 0., 5.), l0 = floor(lvl), lf = lvl - l0;
   float ka = exp2(-l0), kb = ka*0.5, fa = fsc*ka, fb = fsc*kb;
@@ -320,7 +329,7 @@ void main(){
   // and the overflow creek: three strands weaving down one stained bed
   vec3 ck = creekST(p);
   float cS = ck.x, cT = ck.y, cw = max(0.32, 1.6*px), creekCh = 0., creekE = 9.;
-  for (int i = 0; i < 3; i++){
+  if (ck.z > 0.) for (int i = 0; i < 3; i++){
     float fi = float(i), mainK = step(fi, 0.5);
     float ti = (2.7*sin(cS*0.15 + fi*2.1 + uSeed.x) + 1.1*sin(cS*0.43 + fi*4.3) + (vnoise(vec2(cS*0.3, fi*7.3 + 2.)) - 0.5)*2.2)*mix(1., 0.5, mainK);
     float ce = abs(cT - ti);
@@ -350,7 +359,7 @@ void main(){
   // the geyser's apron: wet where the curtain falls, stained by its own runoff
   vec2 gdir = gq/max(gd, 1e-3);
   float gfq = 10. + gd*0.05;
-  float gst = fbm2b(gdir*gfq + sw*2. + vec2(gd*0.09, -gd*0.05) + 31., gd/gfq, px);
+  float gst = gd < 50. ? fbm2b(gdir*gfq + sw*2. + vec2(gd*0.09, -gd*0.05) + 31., gd/gfq, px) : 0.5;     // (gmat, ap: nil beyond 50 m)
   float gdw = length(gq - uWind*4.);
   float gwet = (1. - smoothstep(10., 34., gdw))*(0.25 + 0.75*uGey.w);
   float gmat = 1. - smoothstep(14., 40., gd + (gst - 0.5)*18.);
@@ -445,8 +454,7 @@ void main(){
   // across) and is a metre wide, not a fourteen-metre fade
   float eM = max(0.8, px*1.6);
   meadow = mix(meadow, smoothstep(-eM, eM, sR - 1. + (n2 - 0.5)*9. + (n3 - 0.5)*3.5), uEdge);
-  vec3 grass = uCMeadow*meadowTone(p, px);
-  colr = mix(colr, mix(grass, uCMoss*(0.8 + 0.4*n2), warm*0.8), meadow);
+  if (meadow > 0.) colr = mix(colr, mix(uCMeadow*meadowTone(p, px), uCMoss*(0.8 + 0.4*n2), warm*0.8), meadow);
   float fr = clamp(frost*(0.28 + 0.35*n1 + 0.25*meadow), 0., 0.6);
   colr = mix(colr, uCFrost*(0.80 + 0.15*n3), fr);
   // relief from the height field (screen-space gradient mapped back to metres), close range only
@@ -462,8 +470,8 @@ void main(){
   float lit = sunGate(vP.y);
   float sh = max(castShadow(p, px), geyShadow(p));
   float along = -dot(p, uSunXZ), across = dot(p, vec2(-uSunXZ.y, uSunXZ.x));
-  float veil = fbm2(vec2(along*0.011 - uTime*0.02, across*0.045) + 40.);
-  sh = max(sh, smoothstep(0.52, 0.85, veil)*smoothstep(-20., 60., along)*(1. - smoothstep(60., 110., abs(across)))*0.5*min(uSteamK, 1.5));
+  float veilK = smoothstep(-20., 60., along)*(1. - smoothstep(60., 110., abs(across)))*0.5*min(uSteamK, 1.5);
+  if (veilK > 0.) sh = max(sh, smoothstep(0.52, 0.85, fbm2(vec2(along*0.011 - uTime*0.02, across*0.045) + 40.))*veilK);
   // the grazing sun exaggerates slopes threefold up close; from the air the gain falls and the flat tone stays the same
   float ndl = max(dot(N, uSunDir), 0.), n0 = max(uSunDir.y, 0.);
   float sunT = clamp(min(n0*3. + 0.07, 0.85) + (ndl - n0)*mix(1.5, 3., rel), 0.07, 0.85);
