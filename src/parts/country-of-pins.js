@@ -368,8 +368,8 @@ float reliefShadow(vec2 f, float back){
   float sl = max(length(uSun.xz), 1e-4); vec2 sh = uSun.xz / sl;
   float tn = max(uSun.y / sl, 0.17);   // a sun on the horizon still throws shadows no longer than six heights
   float s = smoothstep(0.0, 0.5, fieldH(f + sh * 2.0, back) - h - 2.0 * tn);
-  s = max(s, smoothstep(0.0, 0.7, fieldH(f + sh * 6.0, back) - h - 6.0 * tn));
-  s = max(s, smoothstep(0.0, 1.0, fieldH(f + sh * 15.0, back) - h - 15.0 * tn));
+  if (s < 1.0) s = max(s, smoothstep(0.0, 0.7, fieldH(f + sh * 6.0, back) - h - 6.0 * tn));    // (a full shadow needs no more samples)
+  if (s < 1.0) s = max(s, smoothstep(0.0, 1.0, fieldH(f + sh * 15.0, back) - h - 15.0 * tn));
   gEmb = e0; gWake = w0; gBelt = b0;
   return s;
 }
@@ -691,14 +691,18 @@ void main(){
   // heads get finer with distance: 3.4 px cells just outside the real pins, 2.3 px and fainter far out (an even grain)
   float farness = smoothstep(40.0, 520.0, length(Vd));
   float minPx = mix(3.4, 2.3, farness);
-  float spA, spB; float gvA = stipple(f, pxS, k0, minPx, pS, spA), gvB = stipple(f, pxS, k0 + 1.0, minPx, pS, spB);
-  float gv = mix(gvA, gvB, kw), spk = mix(spA, spB, kw);
   float far1 = 1.0 - smoothstep(7.0, 9.5, log2(max(fpx.x, fpx.y) * 1.7 / PITCH));   // the last cells before the horizon melt away
   float tallW = max(smoothstep(0.3, 1.0, slope), smoothstep(4.0, 12.0, hAvg));       // the Roller and other tall relief: finer, gentler
   // the grain lives in the middle distance: at the horizon (cells would smear into dashes) and looking steeply down from
   // the crown it melts into a satin, and just outside the real pins it is as strong as they are
-  float nearW = 1.0 - smoothstep(0.0, 70.0, length(f - uWin.xy) - uWin.z);
   float gAmp = far1 * smoothstep(0.004, 0.03, vy) * (1.0 - 0.55 * smoothstep(0.2, 0.6, vy)) * (1.0 - 0.45 * tallW) * mix(1.0, 0.5, farness);
+  // (each heading's stipple only where it has weight: kw is 0 or 1 over most of the frame, and with gAmp 0 neither shows)
+  float spA = 0.0, spB = 0.0, gvA = 0.0, gvB = 0.0;
+  if (gAmp > 0.0) {
+    if (kw < 1.0) gvA = stipple(f, pxS, k0, minPx, pS, spA);
+    if (kw > 0.0) gvB = stipple(f, pxS, k0 + 1.0, minPx, pS, spB);
+  }
+  float gv = mix(gvA, gvB, kw), spk = mix(spA, spB, kw);
   float cph = f.y + 1.7 * sin(f.x * 0.021 + 1.3), tb = 0.9 * uTime;
   float bands = crest(cph, 9.0, fpx.y, tb) + crest(cph + 3.0, 36.0, fpx.y, tb * 0.5) + crest(cph + 40.0, 144.0, fpx.y, tb * 0.25) + crest(cph + 110.0, 576.0, fpx.y, tb * 0.12);
   bands = min(bands, 1.2) * uGl.w * (1.0 - tallW) * 0.6 * (1.0 - 0.75 * smoothstep(0.08, 0.3, vy));   // whole thin lines: broken by the grain they read as dashes
@@ -711,7 +715,12 @@ void main(){
   float cM = atan(qb.y, (abs(qb.x) + abs(qb.y) < 1e-4) ? 1.0 : qb.x) * 128.0;
   float pM = 128.0 * (abs(qb.x * dfx.y - qb.y * dfx.x) + abs(qb.x * dfy.y - qb.y * dfy.x)) / max(dot(qb, qb), 1.0);
   float ballW = 1.0 - smoothstep(129.0, 137.0, dB);
-  vec3 pp = mix(mix(pipes(f.x, fpx.x, 11.0), pipes(f.y, fpx.y, 3.0), sxw), pipes(cM, pM, 5.0), ballW);
+  // (pipes only on slopes, where pAmp and pG give them weight, and only the axes that have weight)
+  vec3 pp = vec3(0.0);
+  if (slope > 0.3) {
+    vec3 pq = ballW >= 1.0 ? vec3(0.0) : sxw <= 0.0 ? pipes(f.x, fpx.x, 11.0) : sxw >= 1.0 ? pipes(f.y, fpx.y, 3.0) : mix(pipes(f.x, fpx.x, 11.0), pipes(f.y, fpx.y, 3.0), sxw);
+    pp = ballW <= 0.0 ? pq : mix(pq, pipes(cM, pM, 5.0), ballW);
+  }
   // full contrast on sheer feet and walls, a faint ruling on the staircase of a flank, and none once a pipe would be many pins wide
   float lvP = log2(max(mix(mix(fpx.x, fpx.y, sxw), pM, ballW), 1e-4) * 4.0 / PITCH);
   float sheer = smoothstep(3.0, 6.0, slope);     // a true wall (the trench) keeps its pipes however far it runs
@@ -837,15 +846,25 @@ uniform vec2 uWinCell, uWinN;
 #ifdef FIXED
 attribute vec4 aLift;       // standing pins (columns, collar): height, chase amplitude, chase phase, extra height (times uTall)
 #endif
+#ifdef PRE
+uniform sampler2D uPre;     // this frame's per-pin values from PIN_BAKE (texel 2i: height, emboss, belt, shade; 2i+1: shaft foot)
+#endif
 varying vec3 vP, vN; varying float vKind, vH, vDepth, vShadow, vEmb, vShade, vBelt;
 #include <fog_pars_vertex>
 void main(){
   vec2 ij = aCell + floor((uWinCell - aCell) / uWinN + 0.5) * uWinN;
   vec2 cell = vec2(ij.x - floor(ij.y * 0.5 + 0.001), ij.y);
   vec2 fp = pinPos(cell);
+#ifdef PRE
+  ivec2 tc = ivec2(int(aCell.x) * 2, int(aCell.y));
+  vec4 pa = texelFetch(uPre, tc, 0);
+  float hsh = hash1(cell), hc = pa.x;
+  vEmb = pa.y; vBelt = pa.z; vShade = pa.w;
+#else
   float hsh; float hc = pinHeight(cell, hsh);
   vEmb = gEmbA; vBelt = gBeltA;
   vShade = reliefShadow(fp, 0.12);
+#endif
 #ifdef FIXED
   vShade = 0.0;
   float lift = aLift.x + aLift.w * uTall + aLift.y * (0.5 + 0.5 * sin(uTime * 0.9 + aLift.z)), sc = 1.0;
@@ -863,11 +882,16 @@ void main(){
   lp.xz *= sc;
   float y = hc + lp.y;
   if (aKind > 2.5) y = hc - 24.0 - lift;
+#ifdef PRE
+  float nb = texelFetch(uPre, tc + ivec2(1, 0), 0).x;
+#else
   float G0 = fieldH(fp, 0.6);
+#ifdef FIXED
+  float nb = G0 + 0.2;
+#else
   vec2 grad = vec2(fieldH(fp + vec2(0.4, 0.0), 0.6) - G0, fieldH(fp + vec2(0.0, 0.4), 0.6) - G0) / 0.4;
   float nb = min(hc, G0 + 0.2) - min(length(grad), 30.0) * PITCH * 1.5;
-#ifdef FIXED
-  nb = G0 + 0.2;
+#endif
 #endif
   vDepth = nb;
   vKind = aKind; vH = hc; vN = ln;
@@ -876,6 +900,24 @@ void main(){
   vec4 mvPosition = modelViewMatrix * vec4(vP, 1.0);
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
+}`;
+// the window pins' per-pin values, once a frame into a float texture (2 texels a pin) instead of in each of a pin's
+// 37 vertices and again for the second eye: the same maths as PIN_VERT's fallback path
+const PIN_BAKE = /* glsl */`
+${GLSL_UNIFORMS}
+${GLSL_LATTICE}
+${GLSL_HEIGHT}
+uniform vec2 uWinCell, uWinN;
+void main(){
+  vec2 px = floor(gl_FragCoord.xy), aCell = vec2(floor(px.x * 0.5), px.y);
+  vec2 ij = aCell + floor((uWinCell - aCell) / uWinN + 0.5) * uWinN;
+  vec2 cell = vec2(ij.x - floor(ij.y * 0.5 + 0.001), ij.y);
+  vec2 fp = pinPos(cell);
+  float hsh; float hc = pinHeight(cell, hsh);
+  if (mod(px.x, 2.0) < 0.5) { gl_FragColor = vec4(hc, gEmbA, gBeltA, reliefShadow(fp, 0.12)); return; }
+  float G0 = fieldH(fp, 0.6);
+  vec2 grad = vec2(fieldH(fp + vec2(0.4, 0.0), 0.6) - G0, fieldH(fp + vec2(0.0, 0.4), 0.6) - G0) / 0.4;
+  gl_FragColor = vec4(min(hc, G0 + 0.2) - min(length(grad), 30.0) * PITCH * 1.5, 0.0, 0.0, 1.0);
 }`;
 const PIN_FRAG = /* glsl */`
 ${GLSL_UNIFORMS}
@@ -1088,22 +1130,42 @@ export async function buildHero(ctx, opts = {}) {
   // the same sky(dir) the heads mirror
   let skyDome = null;
   if (opts.skyDome ?? false) {
-    skyDome = new THREE.Mesh(new THREE.SphereGeometry(2600, 32, 16), new THREE.ShaderMaterial({
-      uniforms: U, side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+    // drawn last with the depth test, so it shades only the sky left over; 4700 m keeps it behind the 3400 m plain and
+    // inside the world's 5000 m far plane
+    skyDome = new THREE.Mesh(new THREE.SphereGeometry(4700, 32, 16), new THREE.ShaderMaterial({
+      uniforms: U, side: THREE.BackSide, depthWrite: false, fog: false,
       vertexShader: 'varying vec3 vD; void main(){ vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `${GLSL_UNIFORMS}${GLSL_SKY} varying vec3 vD; void main(){ vec3 d = vD / max(length(vD), 1e-3);
         vec3 c = skyCol(vec3(d.x, abs(d.y), d.z)); float sd = max(dot(d, uSun), 0.0);
         c += vec3(1.0, 0.86, 0.6) * 5.0 * smoothstep(0.99985, 0.99994, sd);
         gl_FragColor = vec4(c, 1.0); }`,
     }));
-    skyDome.renderOrder = -0.5; skyDome.frustumCulled = false; object.add(skyDome);
+    skyDome.renderOrder = 0.5; skyDome.frustumCulled = false; object.add(skyDome);
   }
   await ctx.yield?.();
   // near tier
   const pinCount = Math.round((opts.nearPins ?? 2850) * detail);
   const pins = buildPinGeometry(pinCount, rng);
   const pinU = { uWinCell: { value: new THREE.Vector2() }, uWinN: { value: new THREE.Vector2(pins.nx, pins.nz) } };
-  const pinMesh = new THREE.Mesh(pins.geometry, mk(PIN_VERT, PIN_FRAG, pinU)); pinMesh.frustumCulled = false; object.add(pinMesh);
+  // per-pin values baked once a frame (PIN_BAKE) where float buffers can be drawn into; otherwise every vertex works them out
+  const gl = ctx.renderer, bake = gl?.extensions?.has('EXT_color_buffer_float') ? {
+    rt: new THREE.WebGLRenderTarget(pins.nx * 2, pins.nz, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false }),
+    scene: new THREE.Scene(), cam: new THREE.Camera(),
+  } : null;
+  if (bake) {
+    const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ uniforms: { ...U, ...pinU }, depthTest: false, depthWrite: false,
+      vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }', fragmentShader: PIN_BAKE }));
+    q.frustumCulled = false; bake.scene.add(q);
+    bake.run = () => { const prev = gl.getRenderTarget(); gl.setRenderTarget(bake.rt); gl.render(bake.scene, bake.cam); gl.setRenderTarget(prev); };
+  }
+  const pinMesh = new THREE.Mesh(pins.geometry, mk(PIN_VERT, PIN_FRAG, bake ? { ...pinU, uPre: { value: bake.rt.texture } } : pinU, bake ? { PRE: 1 } : {}));
+  pinMesh.frustumCulled = false; object.add(pinMesh);
+  pinMesh.renderOrder = -0.3;   // real pins before the far shader, so it is not run under them
+  if (bake) {   // seen along the rows the shafts stand many deep: lay their depth first so the pin shader runs once a pixel
+    const pre = mk(PIN_VERT, 'void main(){ gl_FragColor = vec4(0.0); }', { ...pinU, uPre: { value: bake.rt.texture } }, { PRE: 1 });
+    pre.colorWrite = false;
+    const pm = new THREE.Mesh(pins.geometry, pre); pm.frustumCulled = false; pm.renderOrder = -0.4; object.add(pm);
+  }
   U.uWin.value.z = pins.radius - 0.5;
   await ctx.yield?.();
   // marbles (never thinned: the brief counts them)
@@ -1160,7 +1222,7 @@ export async function buildHero(ctx, opts = {}) {
     g.setAttribute('aLift', new THREE.InstancedBufferAttribute(lift.slice(0, k * 4), 4));
     g.instanceCount = k;
     const m = new THREE.Mesh(g, mk(PIN_VERT, PIN_FRAG, { uWinCell: { value: new THREE.Vector2(0, 0) }, uWinN: { value: new THREE.Vector2(4e6, 4e6) } }, { FIXED: 1 }));
-    m.frustumCulled = false; object.add(m); return m;
+    m.frustumCulled = false; m.renderOrder = -0.3; object.add(m); return m;
   }
 
   // ---- anchors (local space; in stand-alone mode the ball sits at the origin heading +Z) ----
@@ -1223,6 +1285,7 @@ export async function buildHero(ctx, opts = {}) {
     if (patch) { U.uPatch.value.x = camL.x; U.uPatch.value.y = camL.z; }
     const j0 = Math.round(wz / ROW);
     pinU.uWinCell.value.set(Math.round(wx / PITCH - 0.5 * (((j0 % 2) + 2) % 2)), j0);
+    bake?.run();
   }
   // CPU upper bound of the pin tops at a local point (for clearance checks along a camera path)
   function heightAt(x, z, ballX = U.uBall.value.x, ballZ = U.uBall.value.y) {
@@ -1230,7 +1293,7 @@ export async function buildHero(ctx, opts = {}) {
     const cap = Math.max(0, Math.sqrt(Math.max(0, R_BALL * R_BALL - d2)) - SINK);
     return cap + (cap > 0 ? 3.2 : 0) + U.uRip.value * 1.3 + U.uWakeAmp.value + 1.2;
   }
-  update(0, 0, null);
+  update(0, 0, null); bake?.run();
 
   // ---- what the viewer orbits (close-up debug views: ?pinview=flank|crown|wake|foot) ----
   let radius = 150, height = 113, center = new THREE.Vector3(0, 46, 0);
@@ -1248,7 +1311,7 @@ export async function buildHero(ctx, opts = {}) {
     uniforms: U,
     glsl: { uniforms: GLSL_UNIFORMS, lattice: GLSL_LATTICE, height: GLSL_HEIGHT, sky: GLSL_SKY, steel: GLSL_STEEL, glass: GLSL_GLASS },
     stats: { pins: pins.geometry.instanceCount, pinTriangles: pins.tris, farTriangles: (farGeo.index.count + farGeos.base.index.count) / 3, marbles: marbleCount },
-    dispose() {},
+    dispose() { bake?.rt.dispose(); },
     ground: false, groundY: 0,
   };
 }

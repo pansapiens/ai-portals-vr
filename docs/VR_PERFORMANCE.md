@@ -43,6 +43,16 @@ Done so far for Bison in the Coloured Steam (`prismatic-dawn`):
   - The terrain's share fell from 28-47 ms to 10-22 ms.
   - The changes are: the terrain returns a flat colour where the hero's ground sheet covers it opaquely, each term is behind an `if` on its weight, the summer sheet stops shading past its edge, and the terrain and the sky draw after the herd, tussocks and pines.
 
+Done so far for The Country of Pins (`country-of-pins`):
+
+- Pattern 3, on the GPU: each of the 6,600 real pins near the camera worked out its height, long shadow and shaft foot (about ten evaluations of the whole height field) in every one of its 37 vertices, and again for the second eye. These values are now drawn once a frame into a small float texture (two texels a pin, `PIN_BAKE` in `src/parts/country-of-pins.js`), which the pin vertex shader reads. Where float buffers cannot be drawn into, the old per-vertex path is kept.
+- Pins seen along their rows stand many shafts deep, and the pin shader ran once for each. A depth-only pass of the pins now goes first, so it runs once a pixel. The real pins also draw before the far field, and the sky dome draws last with the depth test.
+- In the far field's shader the second stipple heading, the riser pipes and the 6 m and 15 m shadow samples are skipped where their weight is zero (pattern 7).
+- The picture is identical (at most 0.1/255) at eight flight points for seed 1 and four each for seeds 3 and 7, and with the fallback path. Measured on the AMD integrated GPU at 1600x900:
+  - Vertex and draw work (the same frame at 64x36) is 3.3-7.7 ms before and 0.9-1.8 ms after.
+  - The whole frame is 13-60 ms, against 33-92 ms before. The largest falls are where the pins fill the view: the close pass (68 to 36 ms), the trench (49 to 20 ms) and the Henge (33 to 13 ms).
+  - The rest is the far field's shader over the open plain (about 50 ms at the entry and along the wake). Its biggest terms are the long pin shadows (four height-field evaluations a pixel, 15-25% of the frame) and the stipple of far heads (10-18%). Reducing these would change the picture, so it would be a headset-only choice. Tried and not taken: without the shadows the frame is about 25% faster, with only the 2 m sample about 12%, and without the 15 m sample about 5%. But every one of these visibly shortens or removes the long shadows of the cast (a leviathan's shadow on the wake halves without the 15 m sample). One stipple heading or no stipple at all gains at most 3 ms and changes 1-68% of the pixels.
+
 ## Top 25: what to change
 
 Kinds: P pixel, V vertex, D alpha-tested (`discard`), O transparent overdraw, Dr draw calls. Effort: S small, M medium, L large.
