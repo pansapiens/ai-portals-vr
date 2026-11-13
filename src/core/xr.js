@@ -10,7 +10,7 @@ import * as THREE from 'three';
 
 const Y = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1);
 const _f = new THREE.Vector3(), _v = new THREE.Vector3(), _v4 = new THREE.Vector4(), _q = new THREE.Quaternion();
-const _M = new THREE.Matrix4(), _C = new THREE.Matrix4();
+const _M = new THREE.Matrix4(), _C = new THREE.Matrix4(), _U = new THREE.Matrix4();
 // the most of the headset's own resolution the picture is drawn at, by graphics level; the engine's governor lowers it (scale)
 // while frames miss the headset's rate, and the next world in the portal is drawn at PORTAL_SCALE of that
 const SCALE = { low: 0.6, medium: 0.75, high: 0.9, ultra: 1 }, MIN_SCALE = 0.45, PORTAL_SCALE = 0.8;
@@ -89,13 +89,18 @@ export class XRView {
     const e = xc[0].projectionMatrix.elements; cam.fov = 2 * Math.atan(1 / e[5]) * 180 / Math.PI; cam.aspect = e[5] / e[0];
   }
 
-  _fit(rt, k) {
-    const t = this.target, w = Math.round(t.width * k), h = Math.round(t.height * k);
+  // The buffers are made at the graphics level's most (top) and keep that size while the governor moves the scale: the eyes are
+  // drawn into the lower-left part of them, k / top of each side (returned, kept on the buffer as rt.used), and read back from
+  // there. Resizing a float, antialiased buffer each time the governor moved (usually a second or two into a world) is a
+  // fresh allocation, which held the headset's frames.
+  _fit(rt, k, top) {
+    const t = this.target, w = Math.round(t.width * top), h = Math.round(t.height * top);
     if (rt.width !== w || rt.height !== h) rt.setSize(w, h);
     if (rt.samples !== this.e.samples) { rt.samples = this.e.samples; rt.dispose(); }
+    return (rt.used = Math.min(1, k / top));
   }
   _viewport(rt, c) {
-    const t = this.target, v = c.viewport, sx = rt.width / t.width, sy = rt.height / t.height;
+    const t = this.target, v = c.viewport, sx = rt.width * rt.used / t.width, sy = rt.height * rt.used / t.height;
     rt.viewport.set(Math.round(v.x * sx), Math.round(v.y * sy), Math.round(v.z * sx), Math.round(v.w * sy));
     rt.scissor.copy(rt.viewport); rt.scissorTest = true;
   }
@@ -109,7 +114,7 @@ export class XRView {
   // The next world B through A's portal, once per eye into the engine's portal buffer (laid out as the headset's).
   portal(A, B, dt) {
     const e = this.e, r = e.renderer, P = A.portal, rim = P.rim, rt = e.portalRT, xc = r.xr.getCamera().cameras, box = [];
-    this._fit(rt, this.scale * PORTAL_SCALE);
+    const pu = this._fit(rt, this.scale * PORTAL_SCALE, this.maxScale * PORTAL_SCALE);
     _M.multiplyMatrices(B.entry, A.exitInv);
     xc.forEach((c, i) => {
       const pc = this.pcs[i];
@@ -124,7 +129,8 @@ export class XRView {
         const x = _v4.x / _v4.w, y = _v4.y / _v4.w; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
       }
       box[i] = [x0, x1, y0, y1];
-      this.pv[i].multiplyMatrices(pc.projectionMatrix, _C).premultiply(this.toVP[i]);
+      // (and from the whole buffer to its lower-left part in use: ndc' = pu * ndc + pu - 1)
+      this.pv[i].multiplyMatrices(pc.projectionMatrix, _C).premultiply(this.toVP[i]).premultiply(_U.set(pu, 0, 0, pu - 1, 0, pu, 0, pu - 1, 0, 0, 1, 0, 0, 0, 0, 1));
     });
     // B's update() is handed the rig carried through the opening (as A's is handed the rig), with eye 0's lens
     const pb = this.pb || (this.pb = newCam()), p0 = this.pcs[0];
@@ -152,13 +158,13 @@ export class XRView {
   // World A, once per eye, then graded onto the headset's buffer.
   render(A, cam, p, time, fade) {
     const r = this.e.renderer, rt = this.rt;
-    this._fit(rt, this.scale);
+    this._fit(rt, this.scale, this.maxScale);
     this._eyes((c, i) => {
       project(this.eyes[i], c, cam.near, cam.far);
       this._viewport(rt, c);
       A.portal.setNextView(this.pv[i]);
       r.setRenderTarget(rt); r.render(A.scene, this.eyes[i]);
     });
-    this.e.post.renderXR(rt, this.target, cam, p, time, fade);
+    this.e.post.renderXR(rt, this.target, cam, p, time, fade, rt.used);
   }
 }

@@ -159,7 +159,8 @@ export class Post {
   }
   // WebXR (xr.js): buf holds every eye's picture where the headset's buffer has it; it is graded straight onto that buffer
   // (target) by the final pass's own shader, drawn once per eye by three's headset camera. No glow, no style lens.
-  renderXR(buf, target, camera, p, time, fade = 1) {
+  // used: the part of each side of buf that holds the picture (xr.js draws into its lower-left part)
+  renderXR(buf, target, camera, p, time, fade = 1, used = 1) {
     if (!this.xrQuad) {
       const g = new THREE.BufferGeometry();   // one triangle over the whole of each eye's viewport
       g.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
@@ -174,7 +175,7 @@ export class Post {
     }
     this._grade(p, time, fade);
     const u = this.final.uniforms, r = this.renderer;
-    u.tDiffuse.value = buf.texture; u.uRes.value.set(target.width, target.height);
+    u.tDiffuse.value = buf.texture; u.uRes.value.set(target.width / used, target.height / used);
     r.xr.enabled = true; r.setRenderTarget(target);
     try { r.render(this.xrQuad, camera); } finally { r.xr.enabled = false; }
   }

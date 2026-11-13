@@ -348,11 +348,11 @@ export class Engine {
     perf.setPhase('compile:' + id);
     let t0 = performance.now(), i = 0;
     const before = new Set(r.info.programs);
-    const some = { traverseVisible() {}, traverse: (fn) => { const t = performance.now(), ms = this._budget(); while (i < draws.length) { try { fn(draws[i++]); } catch (e) { console.warn('compile', id, e); } if (performance.now() - t > ms) break; } } };
+    const some = { traverseVisible() {}, traverse: (fn) => { const t = performance.now(), ms = this._budget(), n0 = r.info.programs.length; while (i < draws.length) { try { fn(draws[i++]); } catch (e) { console.warn('compile', id, e); } if (this._enough(t, ms, n0)) break; } } };
     while (i < draws.length) {
       r.setRenderTarget(this._warmRT);
       try { r.compile(some, this.camera, scene); } finally { r.setRenderTarget(null); }
-      if (i < draws.length) await this._frame();
+      if (i < draws.length) await this._paced();
     }
     //    The shadow pass draws each caster with a depth material of three's own, which no scene holds: its programs
     //    used to be made inside the warm-up draws below, linked and used in one call, and the page stood still for
@@ -455,11 +455,11 @@ export class Engine {
     const none = this._noScene || (this._noScene = new THREE.Scene());   // the shadow pass draws under no scene: no fog, no environment
     let k = 0;
     const some = { traverseVisible: (fn) => { for (const l of lights) fn(l); },
-      traverse: (fn) => { const t = performance.now(), ms = this._budget(); while (k < items.length) { try { fn(items[k++]); } catch (e) { console.warn('compile depth', W.def.id, e); } if (performance.now() - t > ms) break; } } };
+      traverse: (fn) => { const t = performance.now(), ms = this._budget(), n0 = r.info.programs.length; while (k < items.length) { try { fn(items[k++]); } catch (e) { console.warn('compile depth', W.def.id, e); } if (this._enough(t, ms, n0)) break; } } };
     while (k < items.length) {
       r.setRenderTarget(this._warmRT);
       try { r.compile(some, this.camera, none); } catch (e) { console.warn('compile depth', W.def.id, e); k = items.length; } finally { r.setRenderTarget(null); }
-      if (k < items.length) await this._frame();
+      if (k < items.length) await this._paced();
     }
     // three keeps the lights it was handed in the render state of the scene it compiled under, and that scene lives as long as the
     // page: a light's parent is its world, so the last world to come this way stayed whole in main memory (every geometry's arrays)
@@ -467,6 +467,11 @@ export class Engine {
     // list empty; it makes no program and draws nothing. (Found and proved in the page by the performance pass, 10-10.)
     try { r.compile({ traverseVisible() {}, traverse() {} }, this.camera, none); } catch (e) { /* nothing was kept */ }
   }
+  // While a world is on screen, one new shader program at a time: where the browser cannot compile in the background (a
+  // headset's browser) every program sent in a frame may be compiled in the graphics process before that frame is drawn, and a
+  // batch of them can hold the picture still. After each, _paced waits until the graphics process is done.
+  _enough(t, ms, n0) { return performance.now() - t > ms || (ms < 1e6 && this.renderer.info.programs.length > n0); }
+  _paced() { return this._budget() < 1e6 ? this._gpuIdle() : this._frame(); }
   // Waits, a frame at a time and without blocking, until the graphics process has finished everything sent so far.
   async _gpuIdle() {
     const gl = this.renderer.getContext();

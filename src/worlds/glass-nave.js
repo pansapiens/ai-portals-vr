@@ -426,7 +426,9 @@ export default {
         const t = i / 16, a = aE + dirn * t * 2 * Math.PI * 2;
         helix.push([Math.cos(a) * 6.4, 39 + 1.6 * Math.sin(t * 9), lerp(-112, -136, t) + Math.sin(a) * 6.4 * 1.3]);
       }
-      helix.push([5 * dirn, 43, -152]);
+      // out through the eye of the rose (the exit portal), not into the vault above it: the open route runs on past the
+      // portal's plane, so the kit's fade at the route's end happens as they pass through
+      helix.push([2.5 * dirn, 35, portalAt.z + 16], [0, portalAt.y, portalAt.z + 4], [0, portalAt.y, portalAt.z - 12]);
     }
     const DOVE_U = 0.36, DOVE_V = 12.5;
     const doves = F.makeFlock({ rng: rng.fork('doves'), species: 'gulls', count: nDoves, size: 1.8, speed: DOVE_V, form: 'loose', spread: [2.4, 1.6, 12], wander: [1.1, 0.7, 1.1, 0.5],
